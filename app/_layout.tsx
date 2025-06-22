@@ -1,42 +1,22 @@
-// app/_layout.tsx
-import { Stack } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
+import { useEffect } from 'react'
+import { Stack } from 'expo-router'
+import { useAuth } from '../src/hooks/useAuth'
 
-export default function Layout() {
+export default function RootLayout() {
+  const { user, loading } = useAuth()
+
+  if (loading) {
+    // Add a proper loading screen here
+    return null
+  }
+
   return (
-    <>
-      <StatusBar style="auto" />
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: '#FFFFFF' },
-          animation: 'slide_from_right',
-        }}
-      >
-        <Stack.Screen
-          name="index"
-          options={{
-            title: 'Home',
-          }}
-        />
-        <Stack.Screen
-          name="flow-timer"
-          options={{
-            presentation: 'fullScreenModal',
-            animation: 'slide_from_bottom',
-          }}
-        />
-        <Stack.Screen
-          name="reflection"
-          options={{
-            presentation: 'card',
-            gestureEnabled: false, // Prevent swipe back during reflection
-          }}
-        />
-        <Stack.Screen
-          name="projects"
-        />
-      </Stack>
-    </>
-  );
+    <Stack>
+      <Stack.Screen name="index" options={{ headerShown: false }} />
+      <Stack.Screen name="auth" options={{ headerShown: false }} />
+      <Stack.Screen name="flow-timer" options={{ title: 'Flow Timer' }} />
+      <Stack.Screen name="reflection" options={{ title: 'Reflection' }} />
+      <Stack.Screen name="projects" options={{ title: 'Projects' }} />
+    </Stack>
+  )
 }

@@ -1,139 +1,270 @@
-// app/flow-timer.tsx
-import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView } from 'react-native';
-import { useLocalSearchParams, router } from 'expo-router';
-import { Feather } from '@expo/vector-icons';
+import React, { useState, useEffect } from 'react'
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native'
+import { router } from 'expo-router'
+import { projectService } from '../src/services/projectService'
 
-// Custom components
-import GradientBackground from '../components/GradientBackground';
-import Timer from '../components/Timer';
+export default function FlowTimer() {
+  const [duration, setDuration] = useState(15) // minutes
+  const [timeLeft, setTimeLeft] = useState(15 * 60) // seconds
+  const [isRunning, setIsRunning] = useState(false)
+  const [sessionStartTime, setSessionStartTime] = useState<number | null>(null)
 
-export default function FlowTimerScreen() {
-  // Get parameters from router
-  const params = useLocalSearchParams<{ 
-    projectName: string;
-    duration: string;
-  }>();
-  
-  // Get project name from params or use default
-  const projectName = params.projectName || "Untitled Project";
-  const initialDuration = parseInt(params.duration || '900', 10); // Default 15 minutes (900 seconds)
-  
-  // State
-  const [timeRemaining, setTimeRemaining] = useState(initialDuration);
-  const [isActive, setIsActive] = useState(true);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Set up the timer
   useEffect(() => {
-    if (isActive && timeRemaining > 0) {
-      timerRef.current = setInterval(() => {
-        setTimeRemaining(time => time - 1);
-      }, 1000);
-    } else if (timeRemaining === 0) {
-      // Time's up, navigate to reflection screen
-      navigateToReflection();
+    let interval: NodeJS.Timeout | null = null
+    
+    if (isRunning && timeLeft > 0) {
+      interval = setInterval(() => {
+        setTimeLeft(timeLeft => timeLeft - 1)
+      }, 1000)
+    } else if (timeLeft === 0) {
+      // Timer completed
+      handleTimerComplete()
     }
 
-    // Clean up interval
     return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-    };
-  }, [isActive, timeRemaining]);
+      if (interval) clearInterval(interval)
+    }
+  }, [isRunning, timeLeft])
 
-  // Navigate to reflection screen
-  const navigateToReflection = () => {
-    router.push({
-      pathname: '/reflection',
-      params: { 
-        projectName,
-        duration: initialDuration.toString()
-      }
-    });
-  };
+  const startTimer = () => {
+    setIsRunning(true)
+    setSessionStartTime(Date.now())
+  }
 
-  // Toggle timer
-  const toggleTimer = () => {
-    setIsActive(!isActive);
-  };
+  const pauseTimer = () => {
+    setIsRunning(false)
+  }
 
-  // Add more time
-  const addTime = (seconds: number) => {
-    setTimeRemaining(time => time + seconds);
-  };
+  const resetTimer = () => {
+    setIsRunning(false)
+    setTimeLeft(duration * 60)
+    setSessionStartTime(null)
+  }
 
-  // Handle going back
-  const handleBack = () => {
-    router.back();
-  };
+  const handleTimerComplete = async () => {
+    setIsRunning(false)
+    
+    const actualDuration = sessionStartTime 
+      ? Math.round((Date.now() - sessionStartTime) / 60000) 
+      : duration
+    
+    await saveSession(actualDuration, duration)
+  }
+
+  const saveSession = async (actualDuration: number, plannedDuration: number) => {
+    try {
+      const session = await projectService.createSession({
+        duration_minutes: actualDuration,
+        planned_duration: plannedDuration,
+        session_type: 'flow',
+        completed_at: new Date().toISOString()
+      })
+      
+      console.log('✅ Session saved:', session)
+      
+      // Navigate to reflection with session ID
+      router.push(`/reflection?sessionId=${session.id}`)
+    } catch (error) {
+      console.log('❌ Error saving session:', error)
+      // Still navigate to reflection even if save fails
+      router.push('/reflection')
+    }
+  }
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins}:${secs.toString().padStart(2, '0')}`
+  }
+
+  const handleEndEarly = () => {
+    if (sessionStartTime) {
+      const actualDuration = Math.round((Date.now() - sessionStartTime) / 60000)
+      saveSession(actualDuration, duration)
+    } else {
+      router.push('/reflection')
+    }
+  }
 
   return (
-    <GradientBackground timeRemaining={timeRemaining}>
-      <SafeAreaView style={styles.container}>
-        {/* Back button */}
-        <TouchableOpacity 
-          style={styles.backButton} 
-          onPress={handleBack}
-        >
-          <Feather name="arrow-left" size={24} color="#FFFFFF" />
-        </TouchableOpacity>
-        
-        {/* Project title */}
-        <View style={styles.headerContainer}>
-          <Text style={styles.title}>{projectName}</Text>
-          <Text style={styles.subtitle}>Flow State Activated</Text>
+    <View style={styles.container}>
+      <Text style={styles.title}>Flow Timer</Text>
+      
+      {/* Duration Selection */}
+      {!isRunning && timeLeft === duration * 60 && (
+        <View style={styles.durationContainer}>
+          <Text style={styles.label}>Select Duration:</Text>
+          <View style={styles.durationButtons}>
+            {[10, 15, 20, 30].map((mins) => (
+              <TouchableOpacity
+                key={mins}
+                style={[
+                  styles.durationButton,
+                  duration === mins && styles.selectedDuration
+                ]}
+                onPress={() => {
+                  setDuration(mins)
+                  setTimeLeft(mins * 60)
+                }}
+              >
+                <Text style={[
+                  styles.durationText,
+                  duration === mins && styles.selectedDurationText
+                ]}>
+                  {mins}m
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
-        
-        {/* Timer */}
-        <Timer 
-          timeRemaining={timeRemaining}
-          isActive={isActive}
-          toggleTimer={toggleTimer}
-          addTime={addTime}
-        />
-        
-        {/* Message */}
-        <Text style={styles.message}>
-          Focus on your flow. Timer will gently remind you when it's time to reflect.
+      )}
+
+      {/* Timer Display */}
+      <View style={styles.timerContainer}>
+        <Text style={styles.timerText}>{formatTime(timeLeft)}</Text>
+        <Text style={styles.statusText}>
+          {isRunning ? 'In Flow' : timeLeft === 0 ? 'Complete!' : 'Ready to Start'}
         </Text>
-      </SafeAreaView>
-    </GradientBackground>
-  );
+      </View>
+
+      {/* Controls */}
+      <View style={styles.controlsContainer}>
+        {!isRunning ? (
+          <TouchableOpacity style={styles.startButton} onPress={startTimer}>
+            <Text style={styles.buttonText}>Start Flow</Text>
+          </TouchableOpacity>
+        ) : (
+          <>
+            <TouchableOpacity style={styles.pauseButton} onPress={pauseTimer}>
+              <Text style={styles.buttonText}>Pause</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.endButton} onPress={handleEndEarly}>
+              <Text style={styles.buttonText}>End Session</Text>
+            </TouchableOpacity>
+          </>
+        )}
+        
+        <TouchableOpacity style={styles.resetButton} onPress={resetTimer}>
+          <Text style={styles.resetButtonText}>Reset</Text>
+        </TouchableOpacity>
+      </View>
+
+      <TouchableOpacity style={styles.homeButton} onPress={() => router.push('/')}>
+        <Text style={styles.homeButtonText}>← Back to Home</Text>
+      </TouchableOpacity>
+    </View>
+  )
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 20,
-  },
-  backButton: {
-    position: 'absolute',
-    top: 20,
-    left: 20,
-    zIndex: 10,
-  },
-  headerContainer: {
     alignItems: 'center',
-    marginBottom: 60,
+    padding: 20,
+    backgroundColor: '#f8fafc',
   },
   title: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: 'bold',
-    color: '#FFFFFF',
-    marginBottom: 8,
-    textAlign: 'center',
+    color: '#1f2937',
+    marginBottom: 40,
   },
-  subtitle: {
+  durationContainer: {
+    marginBottom: 40,
+    alignItems: 'center',
+  },
+  label: {
+    fontSize: 16,
+    color: '#6b7280',
+    marginBottom: 16,
+  },
+  durationButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  durationButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    backgroundColor: '#e5e7eb',
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  selectedDuration: {
+    backgroundColor: '#8b5cf6',
+    borderColor: '#7c3aed',
+  },
+  durationText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  selectedDurationText: {
+    color: 'white',
+  },
+  timerContainer: {
+    alignItems: 'center',
+    marginBottom: 40,
+  },
+  timerText: {
+    fontSize: 72,
+    fontWeight: 'bold',
+    color: '#1f2937',
+    fontFamily: 'monospace',
+  },
+  statusText: {
+    fontSize: 16,
+    color: '#6b7280',
+    marginTop: 8,
+  },
+  controlsContainer: {
+    gap: 16,
+    alignItems: 'center',
+  },
+  startButton: {
+    backgroundColor: '#10b981',
+    paddingVertical: 16,
+    paddingHorizontal: 32,
+    borderRadius: 12,
+  },
+  pauseButton: {
+    backgroundColor: '#f59e0b',
+    paddingVertical: 16,
+    paddingHorizontal: 32,
+    borderRadius: 12,
+  },
+  endButton: {
+    backgroundColor: '#ef4444',
+    paddingVertical: 16,
+    paddingHorizontal: 32,
+    borderRadius: 12,
+  },
+  resetButton: {
+    backgroundColor: 'transparent',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+  },
+  buttonText: {
+    color: 'white',
     fontSize: 18,
-    color: 'rgba(255, 255, 255, 0.8)',
+    fontWeight: '600',
   },
-  message: {
-    color: 'rgba(255, 255, 255, 0.8)',
-    textAlign: 'center',
-    maxWidth: 280,
+  resetButtonText: {
+    color: '#6b7280',
+    fontSize: 16,
+    fontWeight: '600',
   },
-});
+  homeButton: {
+    position: 'absolute',
+    top: 60,
+    left: 20,
+  },
+  homeButtonText: {
+    fontSize: 16,
+    color: '#8b5cf6',
+  },
+})

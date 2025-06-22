@@ -1,345 +1,355 @@
-// app/index.tsx - Home Screen
-import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  TextInput,
-  FlatList,
-  SafeAreaView,
-  Modal,
-  Alert
-} from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
-import { Feather } from '@expo/vector-icons';
-import { Link, router } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import React, { useState, useEffect } from 'react'
+import { View, Text, TouchableOpacity, StyleSheet, Animated } from 'react-native'
+import { LinearGradient } from 'expo-linear-gradient'
+import { router } from 'expo-router'
+import { projectService } from '../src/services/projectService'
 
-export default function HomeScreen() {
-  // State
-  const [recentProjects, setRecentProjects] = useState<string[]>([]);
-  const [newProjectName, setNewProjectName] = useState('');
-  const [modalVisible, setModalVisible] = useState(false);
-  const [flowDuration, setFlowDuration] = useState('15'); // default 15 minutes
+export default function FlowTimer() {
+  const [duration, setDuration] = useState(15)
+  const [timeLeft, setTimeLeft] = useState(15 * 60)
+  const [isRunning, setIsRunning] = useState(false)
+  const [sessionStartTime, setSessionStartTime] = useState<number | null>(null)
+  const [flowPhase, setFlowPhase] = useState<'setup' | 'entering' | 'deep' | 'transition' | 'complete'>('setup')
+  
+  // Animated values for smooth transitions
+  const fadeAnim = new Animated.Value(1)
+  const pulseAnim = new Animated.Value(1)
 
-  // Load recent projects on mount
   useEffect(() => {
-    loadRecentProjects();
-  }, []);
+    let interval: NodeJS.Timeout | null = null
+    
+    if (isRunning && timeLeft > 0) {
+      interval = setInterval(() => {
+        setTimeLeft(timeLeft => {
+          const newTimeLeft = timeLeft - 1
+          updateFlowPhase(newTimeLeft)
+          return newTimeLeft
+        })
+      }, 1000)
+    } else if (timeLeft === 0) {
+      handleTimerComplete()
+    }
 
-  // Load recent projects from storage
-  const loadRecentProjects = async () => {
+    return () => {
+      if (interval) clearInterval(interval)
+    }
+  }, [isRunning, timeLeft])
+
+  const updateFlowPhase = (secondsLeft: number) => {
+    const totalSeconds = duration * 60
+    const elapsed = totalSeconds - secondsLeft
+    const progress = elapsed / totalSeconds
+
+    if (progress < 0.1) {
+      setFlowPhase('entering')
+    } else if (progress < 0.8) {
+      setFlowPhase('deep')
+      // Fade UI during deep flow
+      Animated.timing(fadeAnim, {
+        toValue: 0.3,
+        duration: 2000,
+        useNativeDriver: true,
+      }).start()
+    } else if (progress < 0.95) {
+      setFlowPhase('transition')
+      // Bring UI back for transition
+      Animated.timing(fadeAnim, {
+        toValue: 0.8,
+        duration: 1000,
+        useNativeDriver: true,
+      }).start()
+    }
+  }
+
+  const getFlowColors = () => {
+    switch (flowPhase) {
+      case 'setup':
+        return ['#f8fafc', '#e2e8f0'] // Cool, neutral
+      case 'entering':
+        return ['#fef3e2', '#fed7aa'] // Warm entry
+      case 'deep':
+        return ['#1e293b', '#334155'] // Deep, focused
+      case 'transition':
+        return ['#581c87', '#7c3aed'] // Gentle alerting
+      case 'complete':
+        return ['#065f46', '#10b981'] // Accomplished
+      default:
+        return ['#f8fafc', '#e2e8f0']
+    }
+  }
+
+  const startTimer = () => {
+    setIsRunning(true)
+    setSessionStartTime(Date.now())
+    setFlowPhase('entering')
+    
+    // Start breathing animation
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1.05,
+          duration: 4000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 4000,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start()
+  }
+
+  const handleTimerComplete = async () => {
+    setIsRunning(false)
+    setFlowPhase('complete')
+    
+    const actualDuration = sessionStartTime 
+      ? Math.round((Date.now() - sessionStartTime) / 60000) 
+      : duration
+    
+    await saveSession(actualDuration, duration)
+  }
+
+  const saveSession = async (actualDuration: number, plannedDuration: number) => {
     try {
-      const projects = await AsyncStorage.getItem('projects');
-      if (projects) {
-        setRecentProjects(JSON.parse(projects));
-      }
+      const session = await projectService.createSession({
+        duration_minutes: actualDuration,
+        planned_duration: plannedDuration,
+        session_type: 'flow',
+        completed_at: new Date().toISOString()
+      })
+      
+      console.log('✅ Session saved:', session)
+      router.push(`/reflection?sessionId=${session.id}`)
     } catch (error) {
-      console.error('Error loading projects:', error);
+      console.log('❌ Error saving session:', error)
+      router.push('/reflection')
     }
-  };
+  }
 
-  // Start flow session with selected project
-  const startFlowSession = (projectName: string) => {
-    // Convert input to minutes (number)
-    const durationMinutes = parseInt(flowDuration, 10) || 15;
-    
-    router.push({
-      pathname: '/flow-timer',
-      params: {
-        projectName,
-        duration: (durationMinutes * 60).toString() // Convert to seconds
-      }
-    });
-    
-    // Reset modal state
-    setModalVisible(false);
-    setNewProjectName('');
-  };
-
-  // Create new project and start session
-  const createNewProject = () => {
-    if (!newProjectName.trim()) {
-      Alert.alert(
-        'Project Name Required',
-        'Please enter a name for your project.',
-        [{ text: 'OK' }]
-      );
-      return;
-    }
-    
-    startFlowSession(newProjectName.trim());
-  };
-
-  // Render recent project item
-  const renderProjectItem = ({ item }: { item: string }) => (
-    <TouchableOpacity
-      style={styles.projectItem}
-      onPress={() => {
-        setModalVisible(true);
-        setNewProjectName(item);
-      }}
-    >
-      <LinearGradient
-        colors={['#6366f1', '#8b5cf6']} // indigo to purple
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 0 }}
-        style={styles.projectGradient}
-      >
-        <Text style={styles.projectName}>{item}</Text>
-      </LinearGradient>
-    </TouchableOpacity>
-  );
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins}:${secs.toString().padStart(2, '0')}`
+  }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>Flow Timer</Text>
-      
-      {/* Quick Start Button */}
-      <TouchableOpacity
-        style={styles.quickStartButton}
-        onPress={() => setModalVisible(true)}
-      >
-        <LinearGradient
-          colors={['#6366f1', '#8b5cf6', '#3b82f6']} // indigo, purple, blue
-          style={styles.quickStartGradient}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-        >
-          <Feather name="clock" size={24} color="#FFFFFF" style={styles.buttonIcon} />
-          <Text style={styles.quickStartText}>Start Flow Timer</Text>
-        </LinearGradient>
-      </TouchableOpacity>
-      
-      {/* Recent Projects */}
-      <View style={styles.recentProjectsContainer}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Recent Projects</Text>
-          <Link href="/projects" asChild>
-            <TouchableOpacity>
-              <Text style={styles.viewAllText}>View All</Text>
-            </TouchableOpacity>
-          </Link>
-        </View>
-        
-        {recentProjects.length > 0 ? (
-          <FlatList
-            data={recentProjects.slice(0, 5)} // Show only 5 most recent
-            renderItem={renderProjectItem}
-            keyExtractor={(item, index) => index.toString()}
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.projectsList}
-          />
-        ) : (
-          <Text style={styles.noProjectsText}>
-            No recent projects. Start your first flow session!
-          </Text>
-        )}
-      </View>
-      
-      {/* New Flow Modal */}
-      <Modal
-        animationType="slide"
-        transparent={true}
-        visible={modalVisible}
-        onRequestClose={() => setModalVisible(false)}
-      >
-        <View style={styles.centeredView}>
-          <View style={styles.modalView}>
-            <Text style={styles.modalTitle}>Start Flow Session</Text>
-            
-            <Text style={styles.label}>Project Name</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Enter project name"
-              value={newProjectName}
-              onChangeText={setNewProjectName}
-            />
-            
-            <Text style={styles.label}>Duration (minutes)</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="15"
-              value={flowDuration}
-              onChangeText={setFlowDuration}
-              keyboardType="number-pad"
-            />
-            
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.button, styles.buttonCancel]}
-                onPress={() => setModalVisible(false)}
-              >
-                <Text style={styles.buttonCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity
-                style={[styles.button, styles.buttonStart]}
-                onPress={createNewProject}
-              >
-                <Text style={styles.buttonStartText}>Start Flow</Text>
-              </TouchableOpacity>
+    <LinearGradient
+      colors={getFlowColors()}
+      style={styles.container}
+    >
+      {/* Setup Phase */}
+      {flowPhase === 'setup' && (
+        <Animated.View style={[styles.setupContainer, { opacity: fadeAnim }]}>
+          <Text style={styles.title}>Ready to flow?</Text>
+          
+          <View style={styles.durationContainer}>
+            <Text style={styles.durationLabel}>Choose your container</Text>
+            <View style={styles.durationButtons}>
+              {[10, 15, 20, 30].map((mins) => (
+                <TouchableOpacity
+                  key={mins}
+                  style={[
+                    styles.durationButton,
+                    duration === mins && styles.selectedDuration
+                  ]}
+                  onPress={() => {
+                    setDuration(mins)
+                    setTimeLeft(mins * 60)
+                  }}
+                >
+                  <Text style={[
+                    styles.durationText,
+                    duration === mins && styles.selectedDurationText
+                  ]}>
+                    {mins}
+                  </Text>
+                </TouchableOpacity>
+              ))}
             </View>
           </View>
+
+          <TouchableOpacity style={styles.startButton} onPress={startTimer}>
+            <Text style={styles.startButtonText}>Begin</Text>
+          </TouchableOpacity>
+        </Animated.View>
+      )}
+
+      {/* Flow State */}
+      {(isRunning || flowPhase === 'complete') && (
+        <View style={styles.flowContainer}>
+          <Animated.View 
+            style={[
+              styles.timerContainer, 
+              { 
+                opacity: fadeAnim,
+                transform: [{ scale: pulseAnim }]
+              }
+            ]}
+          >
+            <Text style={[
+              styles.timerText,
+              { color: flowPhase === 'deep' ? '#f1f5f9' : '#1f2937' }
+            ]}>
+              {formatTime(timeLeft)}
+            </Text>
+            
+            {flowPhase !== 'deep' && (
+              <Text style={[
+                styles.phaseText,
+                { color: flowPhase === 'deep' ? '#cbd5e1' : '#6b7280' }
+              ]}>
+                {flowPhase === 'entering' && 'Settling in...'}
+                {flowPhase === 'transition' && 'Wrapping up...'}
+                {flowPhase === 'complete' && 'Beautiful work.'}
+              </Text>
+            )}
+          </Animated.View>
+
+          {/* Minimal controls that fade during deep flow */}
+          {flowPhase !== 'deep' && flowPhase !== 'complete' && (
+            <Animated.View style={[styles.controlsContainer, { opacity: fadeAnim }]}>
+              <TouchableOpacity 
+                style={styles.subtleButton} 
+                onPress={() => {
+                  setIsRunning(false)
+                  if (sessionStartTime) {
+                    const actualDuration = Math.round((Date.now() - sessionStartTime) / 60000)
+                    saveSession(actualDuration, duration)
+                  }
+                }}
+              >
+                <Text style={styles.subtleButtonText}>Complete session</Text>
+              </TouchableOpacity>
+            </Animated.View>
+          )}
         </View>
-      </Modal>
-    </SafeAreaView>
-  );
+      )}
+
+      {/* Subtle home button */}
+      <TouchableOpacity 
+        style={[styles.homeButton, { opacity: flowPhase === 'deep' ? 0.1 : 0.6 }]} 
+        onPress={() => router.push('/')}
+      >
+        <Text style={styles.homeButtonText}>×</Text>
+      </TouchableOpacity>
+    </LinearGradient>
+  )
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 20,
-    backgroundColor: '#F8FAFC',
+  },
+  setupContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 32,
   },
   title: {
     fontSize: 28,
-    fontWeight: 'bold',
-    marginBottom: 24,
-    color: '#1E293B',
+    fontWeight: '300',
+    color: '#1f2937',
+    marginBottom: 48,
+    textAlign: 'center',
   },
-  quickStartButton: {
-    borderRadius: 12,
-    overflow: 'hidden',
-    marginBottom: 24,
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-  },
-  quickStartGradient: {
-    padding: 20,
+  durationContainer: {
     alignItems: 'center',
+    marginBottom: 48,
+  },
+  durationLabel: {
+    fontSize: 16,
+    color: '#6b7280',
+    marginBottom: 24,
+    fontWeight: '300',
+  },
+  durationButtons: {
     flexDirection: 'row',
+    gap: 16,
+  },
+  durationButton: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
     justifyContent: 'center',
-  },
-  buttonIcon: {
-    marginRight: 10,
-  },
-  quickStartText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  recentProjectsContainer: {
-    flex: 1,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
   },
-  sectionTitle: {
+  selectedDuration: {
+    backgroundColor: 'rgba(139, 92, 246, 0.3)',
+    borderColor: '#8b5cf6',
+  },
+  durationText: {
     fontSize: 18,
-    fontWeight: 'bold',
-    color: '#1E293B',
+    fontWeight: '400',
+    color: '#374151',
   },
-  viewAllText: {
-    color: '#6366F1',
+  selectedDurationText: {
+    color: '#8b5cf6',
     fontWeight: '600',
   },
-  projectsList: {
-    paddingVertical: 8,
-  },
-  projectItem: {
-    marginRight: 12,
-    borderRadius: 10,
-    overflow: 'hidden',
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-  },
-  projectGradient: {
+  startButton: {
     paddingVertical: 16,
-    paddingHorizontal: 20,
-    width: 140,
-    height: 100,
-    justifyContent: 'flex-end',
+    paddingHorizontal: 48,
+    borderRadius: 32,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
   },
-  projectName: {
-    color: '#FFFFFF',
-    fontWeight: 'bold',
-    fontSize: 14,
+  startButtonText: {
+    fontSize: 18,
+    fontWeight: '400',
+    color: '#1f2937',
   },
-  noProjectsText: {
-    color: '#64748B',
-    fontStyle: 'italic',
-    marginTop: 20,
-    textAlign: 'center',
-  },
-  centeredView: {
+  flowContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
   },
-  modalView: {
-    width: '80%',
-    backgroundColor: 'white',
-    borderRadius: 16,
-    padding: 24,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 20,
-    color: '#1E293B',
-    textAlign: 'center',
-  },
-  label: {
-    fontSize: 14,
-    color: '#64748B',
-    marginBottom: 6,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-    fontSize: 16,
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 10,
-  },
-  button: {
-    borderRadius: 8,
-    padding: 12,
-    elevation: 2,
-    flex: 1,
+  timerContainer: {
     alignItems: 'center',
   },
-  buttonCancel: {
-    backgroundColor: '#F1F5F9',
-    marginRight: 8,
+  timerText: {
+    fontSize: 72,
+    fontWeight: '200',
+    fontFamily: 'monospace',
+    letterSpacing: 4,
   },
-  buttonCancelText: {
-    color: '#64748B',
-    fontWeight: 'bold',
+  phaseText: {
+    fontSize: 16,
+    fontWeight: '300',
+    marginTop: 16,
+    textAlign: 'center',
   },
-  buttonStart: {
-    backgroundColor: '#6366F1',
-    marginLeft: 8,
+  controlsContainer: {
+    position: 'absolute',
+    bottom: 100,
   },
-  buttonStartText: {
-    color: 'white',
-    fontWeight: 'bold',
+  subtleButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
   },
-});
+  subtleButtonText: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontWeight: '300',
+  },
+  homeButton: {
+    position: 'absolute',
+    top: 60,
+    right: 24,
+    width: 32,
+    height: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  homeButtonText: {
+    fontSize: 24,
+    color: '#6b7280',
+    fontWeight: '200',
+  },
+})
